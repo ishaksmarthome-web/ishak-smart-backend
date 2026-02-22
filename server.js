@@ -1,6 +1,6 @@
 /*****************************************************
- *  ISHAK SMART HOME - PRODUCTION BACKEND (FINAL)
- *  MQTT + Firebase + Ownership Protection
+ * ISHAK SMART HOME - PRODUCTION BACKEND
+ * MQTT + Firebase + Auth + Ownership + Secure
  *****************************************************/
 
 const mqtt = require("mqtt");
@@ -9,19 +9,29 @@ const express = require("express");
 const cors = require("cors");
 
 /* ====================================================
-   ENV VARIABLES
+   CONFIG
 ==================================================== */
 
 const PORT = process.env.PORT || 5000;
-const FIREBASE_KEY = JSON.parse(process.env.FIREBASE_KEY);
 
 /* ====================================================
-   FIREBASE INIT
+   FIREBASE INIT (DUAL MODE)
 ==================================================== */
 
+let serviceAccount;
+
+if (process.env.FIREBASE_KEY) {
+  serviceAccount = JSON.parse(process.env.FIREBASE_KEY);
+  console.log("🔐 Using Firebase Key From Environment");
+} else {
+  serviceAccount = require("./serviceAccount.json");
+  console.log("🔐 Using Local serviceAccount.json");
+}
+
 admin.initializeApp({
-  credential: admin.credential.cert(FIREBASE_KEY),
-  databaseURL: "https://ishak-smart-home-a36bd-default-rtdb.asia-southeast1.firebasedatabase.app"
+  credential: admin.credential.cert(serviceAccount),
+  databaseURL:
+    "https://ishak-smart-home-a36bd-default-rtdb.asia-southeast1.firebasedatabase.app"
 });
 
 const db = admin.database();
@@ -36,6 +46,84 @@ app.use(express.json());
 
 app.get("/", (req, res) => {
   res.send("🔥 Ishak Smart Backend Running");
+});
+
+/* ====================================================
+   AUTH REGISTER
+==================================================== */
+
+app.post("/register", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    const user = await admin.auth().createUser({
+      email,
+      password
+    });
+
+    res.json({
+      success: true,
+      uid: user.uid,
+      message: "User Registered Successfully"
+    });
+
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
+});
+
+/* ====================================================
+   LOGIN (VERIFY TOKEN)
+==================================================== */
+
+app.post("/login", async (req, res) => {
+  try {
+    const { idToken } = req.body;
+
+    const decodedToken = await admin.auth().verifyIdToken(idToken);
+
+    res.json({
+      success: true,
+      uid: decodedToken.uid,
+      email: decodedToken.email
+    });
+
+  } catch (err) {
+    res.status(401).json({
+      success: false,
+      error: "Invalid Token"
+    });
+  }
+});
+
+/* ====================================================
+   DEVICE REGISTRATION
+==================================================== */
+
+app.post("/register-device", async (req, res) => {
+  try {
+    const { deviceId, ownerUid } = req.body;
+
+    await db.ref("devices/" + deviceId).set({
+      owner: ownerUid,
+      status: "OFFLINE",
+      lastSeen: null
+    });
+
+    res.json({
+      success: true,
+      message: "Device Registered Successfully"
+    });
+
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
 });
 
 /* ====================================================
@@ -57,11 +145,12 @@ client.on("connect", () => {
 });
 
 /* ====================================================
-   MQTT MESSAGE HANDLER
+   MQTT MESSAGE HANDLER (OWNERSHIP PROTECTION)
 ==================================================== */
 
 client.on("message", async (topic, message) => {
   try {
+
     const payload = JSON.parse(message.toString());
     const parts = topic.split("/");
     const deviceId = parts[1];
@@ -72,19 +161,16 @@ client.on("message", async (topic, message) => {
     const snapshot = await deviceRef.once("value");
     const deviceData = snapshot.val();
 
-    // ✅ Device Must Exist
     if (!deviceData) {
       console.log("⚠ Device not registered:", deviceId);
       return;
     }
 
-    // ✅ Ownership Protection
     if (!deviceData.owner) {
       console.log("⚠ Device has no owner:", deviceId);
       return;
     }
 
-    // ✅ Update Device Status Securely
     await deviceRef.update({
       lastSeen: Date.now(),
       status: "ONLINE",
@@ -99,18 +185,19 @@ client.on("message", async (topic, message) => {
 });
 
 /* ====================================================
-   FIREBASE → COMMAND LISTENER
+   COMMAND LISTENER
 ==================================================== */
 
 db.ref("devices").on("child_changed", async (snapshot) => {
 
   try {
+
     const deviceId = snapshot.key;
     const data = snapshot.val();
 
     if (data && data.command) {
 
-      console.log("🚀 Command detected for:", deviceId);
+      console.log("🚀 Command detected:", deviceId);
 
       const topic = `device/${deviceId}/command`;
 
@@ -118,17 +205,17 @@ db.ref("devices").on("child_changed", async (snapshot) => {
         cmd: data.command
       }), { qos: 1 });
 
-      // ✅ Clear command after sending
       await db.ref("devices/" + deviceId + "/command").set(null);
     }
 
   } catch (err) {
-    console.log("Command Listener Error:", err.message);
+    console.log("Command Error:", err.message);
   }
+
 });
 
 /* ====================================================
-   OFFLINE DETECTION (60 SEC RULE)
+   OFFLINE DETECTION (60 SEC)
 ==================================================== */
 
 setInterval(async () => {
@@ -165,38 +252,6 @@ setInterval(async () => {
   }
 
 }, 10000);
-
-/* ====================================================
-   DEVICE REGISTRATION API
-==================================================== */
-
-app.post("/register-device", async (req, res) => {
-
-  try {
-
-    const { deviceId, ownerUid } = req.body;
-
-    await db.ref("devices/" + deviceId).set({
-      owner: ownerUid,
-      status: "OFFLINE",
-      lastSeen: null
-    });
-
-    res.json({
-      success: true,
-      message: "Device Registered Successfully"
-    });
-
-  } catch (err) {
-
-    res.status(500).json({
-      success: false,
-      error: err.message
-    });
-
-  }
-
-});
 
 /* ====================================================
    START SERVER
