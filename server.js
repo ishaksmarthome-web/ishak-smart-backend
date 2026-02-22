@@ -426,6 +426,80 @@ setInterval(async () => {
 
 }, 10000);
 
+/* ====================================================
+   OTA FIRMWARE SYSTEM
+==================================================== */
+
+/*
+   Device calls:
+   GET /latest-firmware
+*/
+
+app.get("/latest-firmware", async (req, res) => {
+
+  try {
+
+    const snapshot = await db.ref("firmware").once("value");
+    const firmware = snapshot.val();
+
+    if (!firmware) {
+
+      return res.json({
+        version: "1.0.0",
+        fileUrl: "",
+        forceUpdate: false
+      });
+
+    }
+
+    res.json(firmware);
+
+  } catch (err) {
+
+    res.status(500).json({
+      error: err.message
+    });
+  }
+
+});
+
+
+/* ====================================================
+   UPDATE FIRMWARE VERSION (ADMIN)
+==================================================== */
+
+/*
+   Admin will call:
+   POST /update-firmware
+*/
+
+app.post("/update-firmware", async (req, res) => {
+
+  try {
+
+    const { version, fileUrl, forceUpdate } = req.body;
+
+    await db.ref("firmware").set({
+      version,
+      fileUrl,
+      forceUpdate: forceUpdate || false,
+      updatedAt: Date.now()
+    });
+
+    res.json({
+      success: true,
+      message: "Firmware Updated Successfully"
+    });
+
+  } catch (err) {
+
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
+
+});
 
 /* ====================================================
    START SERVER
