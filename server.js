@@ -13,28 +13,19 @@ const cors = require("cors");
 ==================================================== */
 
 const PORT = process.env.PORT || 5000;
-const serviceAccount = require("./serviceAccount.json");
+const FIREBASE_KEY = JSON.parse(process.env.FIREBASE_KEY);
 
-/*****************************************************
- * FIREBASE INIT (DUAL MODE - LOCAL + RENDER)
- *****************************************************/
-
-let serviceAccount;
-
-if (process.env.FIREBASE_KEY) {
-  // ✅ Running on Render (Environment Variable Mode)
-  serviceAccount = JSON.parse(process.env.FIREBASE_KEY);
-  console.log("🔐 Using Firebase Key from Environment Variable");
-} else {
-  // ✅ Running Locally
-  serviceAccount = require("./serviceAccount.json");
-  console.log("🔐 Using Local serviceAccount.json");
-}
+/* ====================================================
+   FIREBASE INIT
+==================================================== */
 
 admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
+  credential: admin.credential.cert(FIREBASE_KEY),
   databaseURL: "https://ishak-smart-home-a36bd-default-rtdb.asia-southeast1.firebasedatabase.app"
 });
+
+const db = admin.database();
+
 /* ====================================================
    EXPRESS SETUP
 ==================================================== */
