@@ -357,11 +357,12 @@ client.on("message", async (topic, message) => {
       }
     }
 
-    await deviceRef.update({
-      lastSeen: Date.now(),
-      status: "ONLINE",
-      data: payload
-    });
+  await deviceRef.update({
+  lastSeen: Date.now(),
+  status: "ONLINE",
+  data: payload,
+  capabilities: payload.capabilities || null  // ✅ Save Capability
+});
 
   } catch (err) {
 
