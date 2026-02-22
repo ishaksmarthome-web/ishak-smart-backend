@@ -1,6 +1,6 @@
 /*****************************************************
- * ISHAK SMART HOME - PRODUCTION BACKEND
- * MQTT + Firebase + Auth + Ownership + Secure
+ * ISHAK SMART HOME - FULL PRODUCTION BACKEND
+ * MQTT + Firebase + Auth + Auto Device Attach
  *****************************************************/
 
 const mqtt = require("mqtt");
@@ -49,62 +49,102 @@ app.get("/", (req, res) => {
 });
 
 /* ====================================================
-   AUTH REGISTER
+   USER REGISTER + AUTO DEVICE ATTACH
 ==================================================== */
 
 app.post("/register", async (req, res) => {
-  try {
-    const { email, password } = req.body;
 
+  try {
+
+    const { email, password, deviceIds } = req.body;
+
+    // ✅ Create User
     const user = await admin.auth().createUser({
       email,
       password
     });
 
+    const uid = user.uid;
+
+    console.log("👤 New User Created:", uid);
+
+    // ✅ Auto Attach Devices
+    if (deviceIds && Array.isArray(deviceIds)) {
+
+      for (const deviceId of deviceIds) {
+
+        await db.ref("devices/" + deviceId).set({
+          owner: uid,
+          status: "OFFLINE",
+          lastSeen: null
+        });
+
+        console.log("🔗 Device Auto Attached:", deviceId);
+      }
+    }
+
+    // ✅ Create User Node
+    await db.ref("users/" + uid).set({
+      email,
+      createdAt: Date.now(),
+      devices: deviceIds || []
+    });
+
     res.json({
       success: true,
-      uid: user.uid,
-      message: "User Registered Successfully"
+      uid,
+      message: "User Registered + Devices Attached"
     });
 
   } catch (err) {
+
     res.status(500).json({
       success: false,
       error: err.message
     });
+
   }
+
 });
+
 
 /* ====================================================
    LOGIN (VERIFY TOKEN)
 ==================================================== */
 
 app.post("/login", async (req, res) => {
+
   try {
+
     const { idToken } = req.body;
 
-    const decodedToken = await admin.auth().verifyIdToken(idToken);
+    const decoded = await admin.auth().verifyIdToken(idToken);
 
     res.json({
       success: true,
-      uid: decodedToken.uid,
-      email: decodedToken.email
+      uid: decoded.uid,
+      email: decoded.email
     });
 
   } catch (err) {
+
     res.status(401).json({
       success: false,
       error: "Invalid Token"
     });
   }
+
 });
 
+
 /* ====================================================
-   DEVICE REGISTRATION
+   DEVICE REGISTRATION (MANUAL)
 ==================================================== */
 
 app.post("/register-device", async (req, res) => {
+
   try {
+
     const { deviceId, ownerUid } = req.body;
 
     await db.ref("devices/" + deviceId).set({
@@ -119,12 +159,16 @@ app.post("/register-device", async (req, res) => {
     });
 
   } catch (err) {
+
     res.status(500).json({
       success: false,
       error: err.message
     });
+
   }
+
 });
+
 
 /* ====================================================
    MQTT CONNECTION
@@ -135,6 +179,7 @@ const client = mqtt.connect("mqtt://broker.emqx.io:1883", {
 });
 
 client.on("connect", () => {
+
   console.log("✅ Connected to MQTT Broker");
 
   client.subscribe("device/+/heartbeat");
@@ -142,13 +187,16 @@ client.on("connect", () => {
   client.subscribe("device/+/command");
 
   console.log("📡 Subscribed to device topics");
+
 });
+
 
 /* ====================================================
    MQTT MESSAGE HANDLER (OWNERSHIP PROTECTION)
 ==================================================== */
 
 client.on("message", async (topic, message) => {
+
   try {
 
     const payload = JSON.parse(message.toString());
@@ -182,7 +230,9 @@ client.on("message", async (topic, message) => {
   } catch (err) {
     console.log("MQTT Error:", err.message);
   }
+
 });
+
 
 /* ====================================================
    COMMAND LISTENER
@@ -214,8 +264,9 @@ db.ref("devices").on("child_changed", async (snapshot) => {
 
 });
 
+
 /* ====================================================
-   OFFLINE DETECTION (60 SEC)
+   OFFLINE DETECTION
 ==================================================== */
 
 setInterval(async () => {
@@ -242,6 +293,7 @@ setInterval(async () => {
           await db.ref("devices/" + deviceId).update({
             status: "OFFLINE"
           });
+
         }
       }
 
@@ -252,6 +304,7 @@ setInterval(async () => {
   }
 
 }, 10000);
+
 
 /* ====================================================
    START SERVER
