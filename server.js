@@ -502,6 +502,108 @@ app.post("/update-firmware", isAdmin, async (req, res) => {
 
 });
 
+/* ====================================================
+   DASHBOARD API (ADMIN ONLY)
+==================================================== */
+
+app.get("/dashboard/stats", isAdmin, async (req, res) => {
+
+  try {
+
+    const deviceSnap = await db.ref("devices").once("value");
+    const devices = deviceSnap.val() || {};
+
+    let totalDevices = Object.keys(devices).length;
+    let onlineDevices = 0;
+    let offlineDevices = 0;
+
+    Object.values(devices).forEach(device => {
+
+      if (device.status === "ONLINE") onlineDevices++;
+      if (device.status === "OFFLINE") offlineDevices++;
+
+    });
+
+    const userSnap = await db.ref("users").once("value");
+    const users = userSnap.val() || {};
+    const totalUsers = Object.keys(users).length;
+
+    res.json({
+      success: true,
+      data: {
+        totalDevices,
+        onlineDevices,
+        offlineDevices,
+        totalUsers
+      }
+    });
+
+  } catch (err) {
+
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+
+  }
+
+});
+
+
+/* ====================================================
+   DASHBOARD DEVICE LIST (ADMIN ONLY)
+==================================================== */
+
+app.get("/dashboard/devices", isAdmin, async (req, res) => {
+
+  try {
+
+    const snapshot = await db.ref("devices").once("value");
+    const devices = snapshot.val() || {};
+
+    res.json({
+      success: true,
+      devices
+    });
+
+  } catch (err) {
+
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+
+  }
+
+});
+
+
+/* ====================================================
+   DASHBOARD USER LIST (ADMIN ONLY)
+==================================================== */
+
+app.get("/dashboard/users", isAdmin, async (req, res) => {
+
+  try {
+
+    const snapshot = await db.ref("users").once("value");
+    const users = snapshot.val() || {};
+
+    res.json({
+      success: true,
+      users
+    });
+
+  } catch (err) {
+
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+
+  }
+
+});
 
 /* ====================================================
    START SERVER
