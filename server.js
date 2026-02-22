@@ -1,6 +1,7 @@
 /*****************************************************
  * ISHAK SMART HOME - ULTRA PRODUCTION BACKEND
  * MQTT + Firebase + Auth + Device Share System
+ * ✅ Admin Role Protection Added
  *****************************************************/
 
 const mqtt = require("mqtt");
@@ -49,6 +50,38 @@ app.get("/", (req, res) => {
 });
 
 /* ====================================================
+   🔴 ADMIN MIDDLEWARE
+==================================================== */
+
+async function isAdmin(req, res, next) {
+
+  try {
+
+    const token = req.headers.authorization?.split(" ")[1];
+
+    if (!token) {
+      return res.status(401).json({ error: "No Token" });
+    }
+
+    const decoded = await admin.auth().verifyIdToken(token);
+
+    const snap = await db.ref("users/" + decoded.uid).once("value");
+    const user = snap.val();
+
+    if (!user || user.role !== "admin") {
+      return res.status(403).json({ error: "Admin Only Access" });
+    }
+
+    req.user = decoded;
+    next();
+
+  } catch (err) {
+
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+}
+
+/* ====================================================
    USER REGISTER
 ==================================================== */
 
@@ -67,7 +100,13 @@ app.post("/register", async (req, res) => {
 
     console.log("👤 User Created:", uid);
 
-    // Auto Attach Devices (if provided)
+    await db.ref("users/" + uid).set({
+      email,
+      role: "user",  // 🔵 Default Role
+      createdAt: Date.now(),
+      devices: deviceIds || []
+    });
+
     if (deviceIds && Array.isArray(deviceIds)) {
 
       for (const deviceId of deviceIds) {
@@ -80,12 +119,6 @@ app.post("/register", async (req, res) => {
 
       }
     }
-
-    await db.ref("users/" + uid).set({
-      email,
-      createdAt: Date.now(),
-      devices: deviceIds || []
-    });
 
     res.json({
       success: true,
@@ -106,7 +139,7 @@ app.post("/register", async (req, res) => {
 
 
 /* ====================================================
-   LOGIN (TOKEN VERIFY)
+   LOGIN
 ==================================================== */
 
 app.post("/login", async (req, res) => {
@@ -117,10 +150,14 @@ app.post("/login", async (req, res) => {
 
     const decoded = await admin.auth().verifyIdToken(idToken);
 
+    const snap = await db.ref("users/" + decoded.uid).once("value");
+    const user = snap.val();
+
     res.json({
       success: true,
       uid: decoded.uid,
-      email: decoded.email
+      email: decoded.email,
+      role: user?.role || "user"
     });
 
   } catch (err) {
@@ -136,7 +173,7 @@ app.post("/login", async (req, res) => {
 
 
 /* ====================================================
-   AUTO DEVICE REGISTER (FIRST BOOT)
+   AUTO DEVICE REGISTER
 ==================================================== */
 
 app.post("/auto-register-device", async (req, res) => {
@@ -147,9 +184,8 @@ app.post("/auto-register-device", async (req, res) => {
 
     const deviceRef = db.ref("devices/" + deviceId);
     const snapshot = await deviceRef.once("value");
-    const device = snapshot.val();
 
-    if (device) {
+    if (snapshot.val()) {
       return res.json({
         success: false,
         message: "Device Already Registered"
@@ -183,7 +219,7 @@ app.post("/auto-register-device", async (req, res) => {
 
 
 /* ====================================================
-   DEVICE SHARE SYSTEM
+   DEVICE SHARE
 ==================================================== */
 
 app.post("/share-device", async (req, res) => {
@@ -212,18 +248,6 @@ app.post("/share-device", async (req, res) => {
 
     await deviceRef.child("sharedWith").update({
       [targetUid]: true
-    });
-
-    await db.ref("users/" + targetUid + "/devices").transaction((devices) => {
-
-      if (!devices) devices = [];
-
-      if (!devices.includes(deviceId)) {
-        devices.push(deviceId);
-      }
-
-      return devices;
-
     });
 
     res.json({
@@ -311,10 +335,6 @@ client.on("connect", () => {
 });
 
 
-/* ====================================================
-   MQTT MESSAGE HANDLER
-==================================================== */
-
 client.on("message", async (topic, message) => {
 
   try {
@@ -329,7 +349,6 @@ client.on("message", async (topic, message) => {
 
     if (!device) return;
 
-    // Secret Verification
     if (device.secret && payload.secret) {
 
       if (device.secret !== payload.secret) {
@@ -343,8 +362,6 @@ client.on("message", async (topic, message) => {
       status: "ONLINE",
       data: payload
     });
-
-    console.log("📥 Device Updated:", deviceId);
 
   } catch (err) {
 
@@ -413,7 +430,6 @@ setInterval(async () => {
             status: "OFFLINE"
           });
 
-          console.log("❌ Device Offline:", deviceId);
         }
       }
     }
@@ -426,14 +442,10 @@ setInterval(async () => {
 
 }, 10000);
 
-/* ====================================================
-   OTA FIRMWARE SYSTEM
-==================================================== */
 
-/*
-   Device calls:
-   GET /latest-firmware
-*/
+/* ====================================================
+   OTA SYSTEM
+==================================================== */
 
 app.get("/latest-firmware", async (req, res) => {
 
@@ -449,31 +461,19 @@ app.get("/latest-firmware", async (req, res) => {
         fileUrl: "",
         forceUpdate: false
       });
-
     }
 
     res.json(firmware);
 
   } catch (err) {
 
-    res.status(500).json({
-      error: err.message
-    });
+    res.status(500).json({ error: err.message });
   }
 
 });
 
 
-/* ====================================================
-   UPDATE FIRMWARE VERSION (ADMIN)
-==================================================== */
-
-/*
-   Admin will call:
-   POST /update-firmware
-*/
-
-app.post("/update-firmware", async (req, res) => {
+app.post("/update-firmware", isAdmin, async (req, res) => {
 
   try {
 
@@ -497,9 +497,11 @@ app.post("/update-firmware", async (req, res) => {
       success: false,
       error: err.message
     });
+
   }
 
 });
+
 
 /* ====================================================
    START SERVER
