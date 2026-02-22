@@ -1,6 +1,6 @@
 /*****************************************************
- * ISHAK SMART HOME - FINAL PRODUCTION BACKEND
- * MQTT + Firebase + Auth + Auto Device Register
+ * ISHAK SMART HOME - ULTRA PRODUCTION BACKEND
+ * MQTT + Firebase + Auth + Device Share System
  *****************************************************/
 
 const mqtt = require("mqtt");
@@ -49,7 +49,7 @@ app.get("/", (req, res) => {
 });
 
 /* ====================================================
-   USER REGISTER + AUTO DEVICE ATTACH
+   USER REGISTER
 ==================================================== */
 
 app.post("/register", async (req, res) => {
@@ -67,6 +67,7 @@ app.post("/register", async (req, res) => {
 
     console.log("👤 User Created:", uid);
 
+    // Auto Attach Devices (if provided)
     if (deviceIds && Array.isArray(deviceIds)) {
 
       for (const deviceId of deviceIds) {
@@ -77,7 +78,6 @@ app.post("/register", async (req, res) => {
           lastSeen: null
         });
 
-        console.log("🔗 Device Attached:", deviceId);
       }
     }
 
@@ -90,7 +90,7 @@ app.post("/register", async (req, res) => {
     res.json({
       success: true,
       uid,
-      message: "User Registered + Devices Attached"
+      message: "User Registered Successfully"
     });
 
   } catch (err) {
@@ -129,6 +129,7 @@ app.post("/login", async (req, res) => {
       success: false,
       error: "Invalid Token"
     });
+
   }
 
 });
@@ -146,23 +147,22 @@ app.post("/auto-register-device", async (req, res) => {
 
     const deviceRef = db.ref("devices/" + deviceId);
     const snapshot = await deviceRef.once("value");
-    const deviceData = snapshot.val();
+    const device = snapshot.val();
 
-    // ✅ If device already exists
-    if (deviceData) {
+    if (device) {
       return res.json({
         success: false,
         message: "Device Already Registered"
       });
     }
 
-    // ✅ Register New Device
     await deviceRef.set({
       owner: null,
       secret: deviceSecret,
       status: "OFFLINE",
       lastSeen: null,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      sharedWith: {}
     });
 
     res.json({
@@ -183,24 +183,99 @@ app.post("/auto-register-device", async (req, res) => {
 
 
 /* ====================================================
-   DEVICE MANUAL REGISTER
+   DEVICE SHARE SYSTEM
 ==================================================== */
 
-app.post("/register-device", async (req, res) => {
+app.post("/share-device", async (req, res) => {
 
   try {
 
-    const { deviceId, ownerUid } = req.body;
+    const { deviceId, ownerUid, targetUid } = req.body;
 
-    await db.ref("devices/" + deviceId).set({
-      owner: ownerUid,
-      status: "OFFLINE",
-      lastSeen: null
+    const deviceRef = db.ref("devices/" + deviceId);
+    const snapshot = await deviceRef.once("value");
+    const device = snapshot.val();
+
+    if (!device) {
+      return res.status(404).json({
+        success: false,
+        message: "Device Not Found"
+      });
+    }
+
+    if (device.owner !== ownerUid) {
+      return res.status(403).json({
+        success: false,
+        message: "Only Owner Can Share"
+      });
+    }
+
+    await deviceRef.child("sharedWith").update({
+      [targetUid]: true
+    });
+
+    await db.ref("users/" + targetUid + "/devices").transaction((devices) => {
+
+      if (!devices) devices = [];
+
+      if (!devices.includes(deviceId)) {
+        devices.push(deviceId);
+      }
+
+      return devices;
+
     });
 
     res.json({
       success: true,
-      message: "Device Registered Successfully"
+      message: "Device Shared Successfully"
+    });
+
+  } catch (err) {
+
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+
+  }
+
+});
+
+
+/* ====================================================
+   DEVICE UNSHARE
+==================================================== */
+
+app.post("/unshare-device", async (req, res) => {
+
+  try {
+
+    const { deviceId, ownerUid, targetUid } = req.body;
+
+    const deviceRef = db.ref("devices/" + deviceId);
+    const snapshot = await deviceRef.once("value");
+    const device = snapshot.val();
+
+    if (!device) {
+      return res.status(404).json({
+        success: false,
+        message: "Device Not Found"
+      });
+    }
+
+    if (device.owner !== ownerUid) {
+      return res.status(403).json({
+        success: false,
+        message: "Only Owner Can Unshare"
+      });
+    }
+
+    await deviceRef.child("sharedWith/" + targetUid).remove();
+
+    res.json({
+      success: true,
+      message: "Device Unshared Successfully"
     });
 
   } catch (err) {
@@ -248,25 +323,19 @@ client.on("message", async (topic, message) => {
     const parts = topic.split("/");
     const deviceId = parts[1];
 
-    console.log("📥 Data from:", deviceId);
-
     const deviceRef = db.ref("devices/" + deviceId);
     const snapshot = await deviceRef.once("value");
-    const deviceData = snapshot.val();
+    const device = snapshot.val();
 
-    if (!deviceData) {
-      console.log("⚠ Device Not Registered:", deviceId);
-      return;
-    }
+    if (!device) return;
 
-    // ✅ Secret Verification (Security Layer)
-    if (deviceData.secret && payload.secret) {
+    // Secret Verification
+    if (device.secret && payload.secret) {
 
-      if (deviceData.secret !== payload.secret) {
-        console.log("🚫 Invalid Device Secret:", deviceId);
+      if (device.secret !== payload.secret) {
+        console.log("🚫 Secret Invalid:", deviceId);
         return;
       }
-
     }
 
     await deviceRef.update({
@@ -275,10 +344,12 @@ client.on("message", async (topic, message) => {
       data: payload
     });
 
-    console.log("✅ Device Updated:", deviceId);
+    console.log("📥 Device Updated:", deviceId);
 
   } catch (err) {
+
     console.log("MQTT Error:", err.message);
+
   }
 
 });
@@ -297,8 +368,6 @@ db.ref("devices").on("child_changed", async (snapshot) => {
 
     if (data && data.command) {
 
-      console.log("🚀 Command detected:", deviceId);
-
       const topic = `device/${deviceId}/command`;
 
       client.publish(topic, JSON.stringify({
@@ -309,7 +378,9 @@ db.ref("devices").on("child_changed", async (snapshot) => {
     }
 
   } catch (err) {
+
     console.log("Command Error:", err.message);
+
   }
 
 });
@@ -328,7 +399,7 @@ setInterval(async () => {
 
     if (!devices) return;
 
-    Object.keys(devices).forEach(async (deviceId) => {
+    for (const deviceId of Object.keys(devices)) {
 
       const device = devices[deviceId];
 
@@ -338,19 +409,19 @@ setInterval(async () => {
 
         if (diff > 60000 && device.status !== "OFFLINE") {
 
-          console.log("❌ Device OFFLINE:", deviceId);
-
           await db.ref("devices/" + deviceId).update({
             status: "OFFLINE"
           });
 
+          console.log("❌ Device Offline:", deviceId);
         }
       }
-
-    });
+    }
 
   } catch (err) {
+
     console.log("Offline Check Error:", err.message);
+
   }
 
 }, 10000);
