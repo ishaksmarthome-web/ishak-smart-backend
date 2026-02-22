@@ -1,17 +1,13 @@
 /*****************************************************
  * ISHAK SMART HOME - ULTRA PRODUCTION BACKEND
- * MQTT + Firebase + Auth + Device Share System
- * ✅ Admin Role Protection Added
+ * MQTT + Firebase + Auth + Device Share
+ * Template + Capability + Admin + Dashboard
  *****************************************************/
 
 const mqtt = require("mqtt");
 const admin = require("firebase-admin");
 const express = require("express");
 const cors = require("cors");
-
-/* ====================================================
-   CONFIG
-==================================================== */
 
 const PORT = process.env.PORT || 5000;
 
@@ -23,7 +19,7 @@ let serviceAccount;
 
 if (process.env.FIREBASE_KEY) {
   serviceAccount = JSON.parse(process.env.FIREBASE_KEY);
-  console.log("🔐 Using Firebase Key From Environment");
+  console.log("🔐 Using Firebase Env Key");
 } else {
   serviceAccount = require("./serviceAccount.json");
   console.log("🔐 Using Local serviceAccount.json");
@@ -31,14 +27,13 @@ if (process.env.FIREBASE_KEY) {
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
-  databaseURL:
-    "https://ishak-smart-home-a36bd-default-rtdb.asia-southeast1.firebasedatabase.app"
+  databaseURL: "YOUR_DATABASE_URL"
 });
 
 const db = admin.database();
 
 /* ====================================================
-   EXPRESS SETUP
+   EXPRESS
 ==================================================== */
 
 const app = express();
@@ -58,10 +53,7 @@ async function isAdmin(req, res, next) {
   try {
 
     const token = req.headers.authorization?.split(" ")[1];
-
-    if (!token) {
-      return res.status(401).json({ error: "No Token" });
-    }
+    if (!token) return res.status(401).json({ error: "No Token" });
 
     const decoded = await admin.auth().verifyIdToken(token);
 
@@ -69,7 +61,7 @@ async function isAdmin(req, res, next) {
     const user = snap.val();
 
     if (!user || user.role !== "admin") {
-      return res.status(403).json({ error: "Admin Only Access" });
+      return res.status(403).json({ error: "Admin Only" });
     }
 
     req.user = decoded;
@@ -89,88 +81,29 @@ app.post("/register", async (req, res) => {
 
   try {
 
-    const { email, password, deviceIds } = req.body;
+    const { email, password } = req.body;
 
     const user = await admin.auth().createUser({
       email,
       password
     });
 
-    const uid = user.uid;
-
-    console.log("👤 User Created:", uid);
-
-    await db.ref("users/" + uid).set({
+    await db.ref("users/" + user.uid).set({
       email,
-      role: "user",  // 🔵 Default Role
+      role: "user",
       createdAt: Date.now(),
-      devices: deviceIds || []
+      devices: []
     });
 
-    if (deviceIds && Array.isArray(deviceIds)) {
-
-      for (const deviceId of deviceIds) {
-
-        await db.ref("devices/" + deviceId).update({
-          owner: uid,
-          status: "OFFLINE",
-          lastSeen: null
-        });
-
-      }
-    }
-
-    res.json({
-      success: true,
-      uid,
-      message: "User Registered Successfully"
-    });
+    res.json({ success: true });
 
   } catch (err) {
 
-    res.status(500).json({
-      success: false,
-      error: err.message
-    });
+    res.status(500).json({ error: err.message });
 
   }
 
 });
-
-
-/* ====================================================
-   LOGIN
-==================================================== */
-
-app.post("/login", async (req, res) => {
-
-  try {
-
-    const { idToken } = req.body;
-
-    const decoded = await admin.auth().verifyIdToken(idToken);
-
-    const snap = await db.ref("users/" + decoded.uid).once("value");
-    const user = snap.val();
-
-    res.json({
-      success: true,
-      uid: decoded.uid,
-      email: decoded.email,
-      role: user?.role || "user"
-    });
-
-  } catch (err) {
-
-    res.status(401).json({
-      success: false,
-      error: "Invalid Token"
-    });
-
-  }
-
-});
-
 
 /* ====================================================
    AUTO DEVICE REGISTER
@@ -182,41 +115,70 @@ app.post("/auto-register-device", async (req, res) => {
 
     const { deviceId, deviceSecret } = req.body;
 
-    const deviceRef = db.ref("devices/" + deviceId);
-    const snapshot = await deviceRef.once("value");
+    const ref = db.ref("devices/" + deviceId);
+    const snap = await ref.once("value");
 
-    if (snapshot.val()) {
-      return res.json({
-        success: false,
-        message: "Device Already Registered"
-      });
+    if (snap.exists()) {
+      return res.json({ message: "Already Registered" });
     }
 
-    await deviceRef.set({
-      owner: null,
+    await ref.set({
       secret: deviceSecret,
+      owner: null,
       status: "OFFLINE",
-      lastSeen: null,
       createdAt: Date.now(),
+      capabilities: null,
+      template: null,
       sharedWith: {}
     });
 
-    res.json({
-      success: true,
-      message: "Device Auto Registered Successfully"
-    });
+    res.json({ success: true });
 
   } catch (err) {
 
-    res.status(500).json({
-      success: false,
-      error: err.message
-    });
+    res.status(500).json({ error: err.message });
 
   }
 
 });
 
+/* ====================================================
+   TEMPLATE SYSTEM
+==================================================== */
+
+/* Create / Update Template */
+app.post("/template", isAdmin, async (req, res) => {
+
+  try {
+
+    const { templateId, config } = req.body;
+
+    await db.ref("templates/" + templateId).set({
+      ...config,
+      updatedAt: Date.now()
+    });
+
+    res.json({ success: true });
+
+  } catch (err) {
+
+    res.status(500).json({ error: err.message });
+
+  }
+
+});
+
+/* Get Templates */
+app.get("/templates", async (req, res) => {
+
+  const snap = await db.ref("templates").once("value");
+
+  res.json({
+    success: true,
+    templates: snap.val() || {}
+  });
+
+});
 
 /* ====================================================
    DEVICE SHARE
@@ -228,47 +190,34 @@ app.post("/share-device", async (req, res) => {
 
     const { deviceId, ownerUid, targetUid } = req.body;
 
-    const deviceRef = db.ref("devices/" + deviceId);
-    const snapshot = await deviceRef.once("value");
-    const device = snapshot.val();
+    const ref = db.ref("devices/" + deviceId);
+    const snap = await ref.once("value");
+    const device = snap.val();
 
     if (!device) {
-      return res.status(404).json({
-        success: false,
-        message: "Device Not Found"
-      });
+      return res.status(404).json({ error: "Device Not Found" });
     }
 
     if (device.owner !== ownerUid) {
-      return res.status(403).json({
-        success: false,
-        message: "Only Owner Can Share"
-      });
+      return res.status(403).json({ error: "Only Owner Can Share" });
     }
 
-    await deviceRef.child("sharedWith").update({
+    await ref.child("sharedWith").update({
       [targetUid]: true
     });
 
-    res.json({
-      success: true,
-      message: "Device Shared Successfully"
-    });
+    res.json({ success: true });
 
   } catch (err) {
 
-    res.status(500).json({
-      success: false,
-      error: err.message
-    });
+    res.status(500).json({ error: err.message });
 
   }
 
 });
 
-
 /* ====================================================
-   DEVICE UNSHARE
+   UNSHARE
 ==================================================== */
 
 app.post("/unshare-device", async (req, res) => {
@@ -277,45 +226,30 @@ app.post("/unshare-device", async (req, res) => {
 
     const { deviceId, ownerUid, targetUid } = req.body;
 
-    const deviceRef = db.ref("devices/" + deviceId);
-    const snapshot = await deviceRef.once("value");
-    const device = snapshot.val();
+    const ref = db.ref("devices/" + deviceId);
+    const snap = await ref.once("value");
+    const device = snap.val();
 
-    if (!device) {
-      return res.status(404).json({
-        success: false,
-        message: "Device Not Found"
-      });
-    }
+    if (!device) return res.status(404).json({ error: "Not Found" });
 
     if (device.owner !== ownerUid) {
-      return res.status(403).json({
-        success: false,
-        message: "Only Owner Can Unshare"
-      });
+      return res.status(403).json({ error: "Not Owner" });
     }
 
-    await deviceRef.child("sharedWith/" + targetUid).remove();
+    await ref.child("sharedWith/" + targetUid).remove();
 
-    res.json({
-      success: true,
-      message: "Device Unshared Successfully"
-    });
+    res.json({ success: true });
 
   } catch (err) {
 
-    res.status(500).json({
-      success: false,
-      error: err.message
-    });
+    res.status(500).json({ error: err.message });
 
   }
 
 });
 
-
 /* ====================================================
-   MQTT CONNECTION
+   MQTT
 ==================================================== */
 
 const client = mqtt.connect("mqtt://broker.emqx.io:1883", {
@@ -324,54 +258,48 @@ const client = mqtt.connect("mqtt://broker.emqx.io:1883", {
 
 client.on("connect", () => {
 
-  console.log("✅ Connected to MQTT Broker");
+  console.log("✅ MQTT Connected");
 
   client.subscribe("device/+/heartbeat");
   client.subscribe("device/+/status");
   client.subscribe("device/+/command");
 
-  console.log("📡 Subscribed to device topics");
-
 });
 
+/* ====================================================
+   MQTT MESSAGE
+==================================================== */
 
 client.on("message", async (topic, message) => {
 
   try {
 
     const payload = JSON.parse(message.toString());
-    const parts = topic.split("/");
-    const deviceId = parts[1];
+    const deviceId = topic.split("/")[1];
 
-    const deviceRef = db.ref("devices/" + deviceId);
-    const snapshot = await deviceRef.once("value");
-    const device = snapshot.val();
+    const ref = db.ref("devices/" + deviceId);
+    const snap = await ref.once("value");
 
-    if (!device) return;
+    if (!snap.exists()) return;
 
-    if (device.secret && payload.secret) {
+    await ref.update({
 
-      if (device.secret !== payload.secret) {
-        console.log("🚫 Secret Invalid:", deviceId);
-        return;
-      }
-    }
+      status: "ONLINE",
+      lastSeen: Date.now(),
 
-  await deviceRef.update({
-  lastSeen: Date.now(),
-  status: "ONLINE",
-  data: payload,
-  capabilities: payload.capabilities || null  // ✅ Save Capability
-});
+      // 🔥 Template + Capability Save
+      template: payload.template || null,
+      capabilities: payload.capabilities || null,
+      data: payload
+
+    });
 
   } catch (err) {
 
     console.log("MQTT Error:", err.message);
-
   }
 
 });
-
 
 /* ====================================================
    COMMAND LISTENER
@@ -379,30 +307,21 @@ client.on("message", async (topic, message) => {
 
 db.ref("devices").on("child_changed", async (snapshot) => {
 
-  try {
+  const deviceId = snapshot.key;
+  const data = snapshot.val();
 
-    const deviceId = snapshot.key;
-    const data = snapshot.val();
+  if (data?.command) {
 
-    if (data && data.command) {
+    client.publish(
+      `device/${deviceId}/command`,
+      JSON.stringify({ cmd: data.command }),
+      { qos: 1 }
+    );
 
-      const topic = `device/${deviceId}/command`;
-
-      client.publish(topic, JSON.stringify({
-        cmd: data.command
-      }), { qos: 1 });
-
-      await db.ref("devices/" + deviceId + "/command").set(null);
-    }
-
-  } catch (err) {
-
-    console.log("Command Error:", err.message);
-
+    await db.ref("devices/" + deviceId + "/command").set(null);
   }
 
 });
-
 
 /* ====================================================
    OFFLINE DETECTION
@@ -410,199 +329,86 @@ db.ref("devices").on("child_changed", async (snapshot) => {
 
 setInterval(async () => {
 
-  try {
+  const snap = await db.ref("devices").once("value");
+  const devices = snap.val() || {};
 
-    const snapshot = await db.ref("devices").once("value");
-    const devices = snapshot.val();
+  for (const id of Object.keys(devices)) {
 
-    if (!devices) return;
+    const device = devices[id];
 
-    for (const deviceId of Object.keys(devices)) {
+    if (device.lastSeen) {
 
-      const device = devices[deviceId];
+      const diff = Date.now() - device.lastSeen;
 
-      if (device.lastSeen) {
+      if (diff > 60000 && device.status !== "OFFLINE") {
 
-        const diff = Date.now() - device.lastSeen;
+        await db.ref("devices/" + id).update({
+          status: "OFFLINE"
+        });
 
-        if (diff > 60000 && device.status !== "OFFLINE") {
-
-          await db.ref("devices/" + deviceId).update({
-            status: "OFFLINE"
-          });
-
-        }
       }
     }
-
-  } catch (err) {
-
-    console.log("Offline Check Error:", err.message);
-
   }
 
 }, 10000);
 
-
 /* ====================================================
-   OTA SYSTEM
+   OTA
 ==================================================== */
 
 app.get("/latest-firmware", async (req, res) => {
 
-  try {
+  const snap = await db.ref("firmware").once("value");
 
-    const snapshot = await db.ref("firmware").once("value");
-    const firmware = snapshot.val();
-
-    if (!firmware) {
-
-      return res.json({
-        version: "1.0.0",
-        fileUrl: "",
-        forceUpdate: false
-      });
-    }
-
-    res.json(firmware);
-
-  } catch (err) {
-
-    res.status(500).json({ error: err.message });
-  }
+  res.json(snap.val() || {
+    version: "1.0.0",
+    fileUrl: "",
+    forceUpdate: false
+  });
 
 });
 
-
 app.post("/update-firmware", isAdmin, async (req, res) => {
 
-  try {
+  const { version, fileUrl, forceUpdate } = req.body;
 
-    const { version, fileUrl, forceUpdate } = req.body;
+  await db.ref("firmware").set({
+    version,
+    fileUrl,
+    forceUpdate: forceUpdate || false,
+    updatedAt: Date.now()
+  });
 
-    await db.ref("firmware").set({
-      version,
-      fileUrl,
-      forceUpdate: forceUpdate || false,
-      updatedAt: Date.now()
-    });
-
-    res.json({
-      success: true,
-      message: "Firmware Updated Successfully"
-    });
-
-  } catch (err) {
-
-    res.status(500).json({
-      success: false,
-      error: err.message
-    });
-
-  }
+  res.json({ success: true });
 
 });
 
 /* ====================================================
-   DASHBOARD API (ADMIN ONLY)
+   DASHBOARD
 ==================================================== */
 
 app.get("/dashboard/stats", isAdmin, async (req, res) => {
 
-  try {
+  const deviceSnap = await db.ref("devices").once("value");
+  const devices = deviceSnap.val() || {};
 
-    const deviceSnap = await db.ref("devices").once("value");
-    const devices = deviceSnap.val() || {};
+  let online = 0;
+  let offline = 0;
 
-    let totalDevices = Object.keys(devices).length;
-    let onlineDevices = 0;
-    let offlineDevices = 0;
+  Object.values(devices).forEach(d => {
+    if (d.status === "ONLINE") online++;
+    if (d.status === "OFFLINE") offline++;
+  });
 
-    Object.values(devices).forEach(device => {
+  const userSnap = await db.ref("users").once("value");
+  const users = userSnap.val() || {};
 
-      if (device.status === "ONLINE") onlineDevices++;
-      if (device.status === "OFFLINE") offlineDevices++;
-
-    });
-
-    const userSnap = await db.ref("users").once("value");
-    const users = userSnap.val() || {};
-    const totalUsers = Object.keys(users).length;
-
-    res.json({
-      success: true,
-      data: {
-        totalDevices,
-        onlineDevices,
-        offlineDevices,
-        totalUsers
-      }
-    });
-
-  } catch (err) {
-
-    res.status(500).json({
-      success: false,
-      error: err.message
-    });
-
-  }
-
-});
-
-
-/* ====================================================
-   DASHBOARD DEVICE LIST (ADMIN ONLY)
-==================================================== */
-
-app.get("/dashboard/devices", isAdmin, async (req, res) => {
-
-  try {
-
-    const snapshot = await db.ref("devices").once("value");
-    const devices = snapshot.val() || {};
-
-    res.json({
-      success: true,
-      devices
-    });
-
-  } catch (err) {
-
-    res.status(500).json({
-      success: false,
-      error: err.message
-    });
-
-  }
-
-});
-
-
-/* ====================================================
-   DASHBOARD USER LIST (ADMIN ONLY)
-==================================================== */
-
-app.get("/dashboard/users", isAdmin, async (req, res) => {
-
-  try {
-
-    const snapshot = await db.ref("users").once("value");
-    const users = snapshot.val() || {};
-
-    res.json({
-      success: true,
-      users
-    });
-
-  } catch (err) {
-
-    res.status(500).json({
-      success: false,
-      error: err.message
-    });
-
-  }
+  res.json({
+    totalDevices: Object.keys(devices).length,
+    onlineDevices: online,
+    offlineDevices: offline,
+    totalUsers: Object.keys(users).length
+  });
 
 });
 
