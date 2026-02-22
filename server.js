@@ -1,6 +1,6 @@
 /*****************************************************
- * ISHAK SMART HOME - FULL PRODUCTION BACKEND
- * MQTT + Firebase + Auth + Auto Device Attach
+ * ISHAK SMART HOME - FINAL PRODUCTION BACKEND
+ * MQTT + Firebase + Auth + Auto Device Register
  *****************************************************/
 
 const mqtt = require("mqtt");
@@ -58,7 +58,6 @@ app.post("/register", async (req, res) => {
 
     const { email, password, deviceIds } = req.body;
 
-    // ✅ Create User
     const user = await admin.auth().createUser({
       email,
       password
@@ -66,24 +65,22 @@ app.post("/register", async (req, res) => {
 
     const uid = user.uid;
 
-    console.log("👤 New User Created:", uid);
+    console.log("👤 User Created:", uid);
 
-    // ✅ Auto Attach Devices
     if (deviceIds && Array.isArray(deviceIds)) {
 
       for (const deviceId of deviceIds) {
 
-        await db.ref("devices/" + deviceId).set({
+        await db.ref("devices/" + deviceId).update({
           owner: uid,
           status: "OFFLINE",
           lastSeen: null
         });
 
-        console.log("🔗 Device Auto Attached:", deviceId);
+        console.log("🔗 Device Attached:", deviceId);
       }
     }
 
-    // ✅ Create User Node
     await db.ref("users/" + uid).set({
       email,
       createdAt: Date.now(),
@@ -109,7 +106,7 @@ app.post("/register", async (req, res) => {
 
 
 /* ====================================================
-   LOGIN (VERIFY TOKEN)
+   LOGIN (TOKEN VERIFY)
 ==================================================== */
 
 app.post("/login", async (req, res) => {
@@ -138,7 +135,55 @@ app.post("/login", async (req, res) => {
 
 
 /* ====================================================
-   DEVICE REGISTRATION (MANUAL)
+   AUTO DEVICE REGISTER (FIRST BOOT)
+==================================================== */
+
+app.post("/auto-register-device", async (req, res) => {
+
+  try {
+
+    const { deviceId, deviceSecret } = req.body;
+
+    const deviceRef = db.ref("devices/" + deviceId);
+    const snapshot = await deviceRef.once("value");
+    const deviceData = snapshot.val();
+
+    // ✅ If device already exists
+    if (deviceData) {
+      return res.json({
+        success: false,
+        message: "Device Already Registered"
+      });
+    }
+
+    // ✅ Register New Device
+    await deviceRef.set({
+      owner: null,
+      secret: deviceSecret,
+      status: "OFFLINE",
+      lastSeen: null,
+      createdAt: Date.now()
+    });
+
+    res.json({
+      success: true,
+      message: "Device Auto Registered Successfully"
+    });
+
+  } catch (err) {
+
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+
+  }
+
+});
+
+
+/* ====================================================
+   DEVICE MANUAL REGISTER
 ==================================================== */
 
 app.post("/register-device", async (req, res) => {
@@ -192,7 +237,7 @@ client.on("connect", () => {
 
 
 /* ====================================================
-   MQTT MESSAGE HANDLER (OWNERSHIP PROTECTION)
+   MQTT MESSAGE HANDLER
 ==================================================== */
 
 client.on("message", async (topic, message) => {
@@ -210,13 +255,18 @@ client.on("message", async (topic, message) => {
     const deviceData = snapshot.val();
 
     if (!deviceData) {
-      console.log("⚠ Device not registered:", deviceId);
+      console.log("⚠ Device Not Registered:", deviceId);
       return;
     }
 
-    if (!deviceData.owner) {
-      console.log("⚠ Device has no owner:", deviceId);
-      return;
+    // ✅ Secret Verification (Security Layer)
+    if (deviceData.secret && payload.secret) {
+
+      if (deviceData.secret !== payload.secret) {
+        console.log("🚫 Invalid Device Secret:", deviceId);
+        return;
+      }
+
     }
 
     await deviceRef.update({
