@@ -340,7 +340,7 @@ setInterval(async () => {
 
       const diff = Date.now() - device.lastSeen;
 
-      if (diff > 60000 && device.status !== "OFFLINE") {
+      if (diff > 20000 && device.status !== "OFFLINE") {
 
         await db.ref("devices/" + id).update({
           status: "OFFLINE"
