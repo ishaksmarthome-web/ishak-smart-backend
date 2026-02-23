@@ -272,31 +272,37 @@ client.on("connect", () => {
 
 client.on("message", async (topic, message) => {
 
-  console.log("📩 Topic:", topic);
-
   try {
 
     const payload = JSON.parse(message.toString());
-    console.log("📦 Payload:", payload);
-
     const deviceId = topic.split("/")[1];
-    console.log("🔵 Device ID:", deviceId);
 
     const ref = db.ref("devices/" + deviceId);
 
+    // 🔥 STATUS TOPIC DETECT
+    if (topic.includes("/status")) {
+
+      await ref.update({
+        status: payload.status,
+        lastSeen: Date.now()
+      });
+
+      return;
+    }
+
+    // 🔥 HEARTBEAT / OTHER DATA
     await ref.update({
+
       status: "ONLINE",
       lastSeen: Date.now(),
       template: payload.template || null,
       capabilities: payload.capabilities || null,
       data: payload
+
     });
 
-    console.log("🔥 Firebase Updated:", deviceId);
-
   } catch (err) {
-
-    console.log("MQTT ERROR:", err.message);
+    console.log("MQTT Error:", err.message);
   }
 
 });
