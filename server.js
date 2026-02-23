@@ -27,7 +27,7 @@ if (process.env.FIREBASE_KEY) {
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
-  databaseURL: "YOUR_DATABASE_URL"
+  databaseURL: "https://ishak-smart-home-a36bd-default-rtdb.asia-southeast1.firebasedatabase.app"
 });
 
 const db = admin.database();
