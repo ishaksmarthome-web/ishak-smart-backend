@@ -275,7 +275,7 @@ client.on("error", (err) => {
 });
 
 /* ====================================================
-   🔥 MQTT MESSAGE (100% STABLE PRODUCTION FIX)
+   🔥 MQTT MESSAGE (ULTRA PRODUCTION FIX - NO UNDEFINED)
 ==================================================== */
 
 client.on("message", async (topic, message) => {
@@ -290,11 +290,16 @@ client.on("message", async (topic, message) => {
     // 🔥 STATUS TOPIC DETECT
     if (topic.includes("/status")) {
 
-      await ref.update({
-        status: payload.status,
+      // ✅ Status topic এ payload.status চেক করছি
+      const updateData = {
         lastSeen: Date.now()
-      });
+      };
 
+      if (payload.status !== undefined && payload.status !== null) {
+        updateData.status = payload.status;
+      }
+
+      await ref.update(updateData);
       return;
     }
 
@@ -304,21 +309,24 @@ client.on("message", async (topic, message) => {
       data: payload
     };
 
-    // ✅ Only add status if exists
+    // ✅ Status - শুধু মাত্র যদি সঠিকভাবে থাকে
     if (payload.status !== undefined && payload.status !== null) {
-      updateData.status = payload.status;
+      if (typeof payload.status === 'string' && payload.status.trim() !== '') {
+        updateData.status = payload.status;
+      }
     }
 
-    // ✅ Only add template if exists
-    if (payload.template) {
+    // ✅ Template - শুধু যদি object হয়
+    if (payload.template && typeof payload.template === 'object') {
       updateData.template = payload.template;
     }
 
-    // ✅ Only add capabilities if exists
-    if (payload.capabilities) {
+    // ✅ Capabilities - শুধু যদি object হয়
+    if (payload.capabilities && typeof payload.capabilities === 'object') {
       updateData.capabilities = payload.capabilities;
     }
 
+    console.log(`📡 Updating ${deviceId} with:`, Object.keys(updateData));
     await ref.update(updateData);
 
   } catch (err) {
