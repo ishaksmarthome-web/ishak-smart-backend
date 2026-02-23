@@ -1,10 +1,8 @@
 /*****************************************************
- * ISHAK SMART HOME - ULTRA PRODUCTION BACKEND
- * MQTT + Firebase + Auth + Device Share
- * Template + Capability + Admin + Dashboard
+ * ISHAK SMART HOME - FIREBASE ONLY BACKEND
+ * No MQTT, Pure Firebase Realtime Database
  *****************************************************/
 
-const mqtt = require("mqtt");
 const admin = require("firebase-admin");
 const express = require("express");
 const cors = require("cors");
@@ -12,7 +10,7 @@ const cors = require("cors");
 const PORT = process.env.PORT || 5000;
 
 /* ====================================================
-   FIREBASE INIT (DUAL MODE)
+   FIREBASE INIT
 ==================================================== */
 
 let serviceAccount;
@@ -41,22 +39,19 @@ app.use(cors());
 app.use(express.json());
 
 app.get("/", (req, res) => {
-  res.send("🔥 Ishak Smart Backend Running");
+  res.send("🔥 Ishak Smart Backend (Firebase Only) Running");
 });
 
 /* ====================================================
-   🔴 ADMIN MIDDLEWARE
+   ADMIN MIDDLEWARE
 ==================================================== */
 
 async function isAdmin(req, res, next) {
-
   try {
-
     const token = req.headers.authorization?.split(" ")[1];
     if (!token) return res.status(401).json({ error: "No Token" });
 
     const decoded = await admin.auth().verifyIdToken(token);
-
     const snap = await db.ref("users/" + decoded.uid).once("value");
     const user = snap.val();
 
@@ -66,9 +61,7 @@ async function isAdmin(req, res, next) {
 
     req.user = decoded;
     next();
-
   } catch (err) {
-
     return res.status(401).json({ error: "Unauthorized" });
   }
 }
@@ -78,15 +71,9 @@ async function isAdmin(req, res, next) {
 ==================================================== */
 
 app.post("/register", async (req, res) => {
-
   try {
-
     const { email, password } = req.body;
-
-    const user = await admin.auth().createUser({
-      email,
-      password
-    });
+    const user = await admin.auth().createUser({ email, password });
 
     await db.ref("users/" + user.uid).set({
       email,
@@ -96,13 +83,9 @@ app.post("/register", async (req, res) => {
     });
 
     res.json({ success: true });
-
   } catch (err) {
-
     res.status(500).json({ error: err.message });
-
   }
-
 });
 
 /* ====================================================
@@ -110,11 +93,8 @@ app.post("/register", async (req, res) => {
 ==================================================== */
 
 app.post("/auto-register-device", async (req, res) => {
-
   try {
-
     const { deviceId, deviceSecret } = req.body;
-
     const ref = db.ref("devices/" + deviceId);
     const snap = await ref.once("value");
 
@@ -127,57 +107,120 @@ app.post("/auto-register-device", async (req, res) => {
       owner: null,
       status: "OFFLINE",
       createdAt: Date.now(),
-      capabilities: null,
-      template: null,
+      capabilities: {
+        relays: 4,
+        fanSpeeds: 4,
+        pwm: true
+      },
+      lights: {
+        1: false,
+        2: false,
+        3: false,
+        4: false
+      },
+      fanSpeed: 0,
+      brightness: 200,
+      lastSeen: Date.now(),
       sharedWith: {}
     });
 
     res.json({ success: true });
-
   } catch (err) {
-
     res.status(500).json({ error: err.message });
-
   }
+});
 
+/* ====================================================
+   DIRECT DEVICE CONTROL API
+==================================================== */
+
+// Control Light
+app.post("/control/light/:deviceId", async (req, res) => {
+  try {
+    const { deviceId } = req.params;
+    const { lightId, state } = req.body; // lightId: 1-4, state: true/false
+
+    await db.ref(`devices/${deviceId}/lights/${lightId}`).set(state);
+    
+    res.json({ 
+      success: true, 
+      message: `Light ${lightId} set to ${state}` 
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Control All Lights
+app.post("/control/all-lights/:deviceId", async (req, res) => {
+  try {
+    const { deviceId } = req.params;
+    const { state } = req.body;
+
+    const updates = {};
+    for (let i = 1; i <= 4; i++) {
+      updates[`lights/${i}`] = state;
+    }
+
+    await db.ref(`devices/${deviceId}`).update(updates);
+    
+    res.json({ success: true, message: `All lights set to ${state}` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Control Fan Speed
+app.post("/control/fan/:deviceId", async (req, res) => {
+  try {
+    const { deviceId } = req.params;
+    const { speed } = req.body; // 0-4
+
+    await db.ref(`devices/${deviceId}/fanSpeed`).set(speed);
+    
+    res.json({ success: true, message: `Fan speed set to ${speed}` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Control Brightness
+app.post("/control/brightness/:deviceId", async (req, res) => {
+  try {
+    const { deviceId } = req.params;
+    const { value } = req.body; // 0-255
+
+    await db.ref(`devices/${deviceId}/brightness`).set(value);
+    
+    res.json({ success: true, message: `Brightness set to ${value}` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 /* ====================================================
    TEMPLATE SYSTEM
 ==================================================== */
 
-/* Create / Update Template */
 app.post("/template", isAdmin, async (req, res) => {
-
   try {
-
     const { templateId, config } = req.body;
-
     await db.ref("templates/" + templateId).set({
       ...config,
       updatedAt: Date.now()
     });
-
     res.json({ success: true });
-
   } catch (err) {
-
     res.status(500).json({ error: err.message });
-
   }
-
 });
 
-/* Get Templates */
 app.get("/templates", async (req, res) => {
-
   const snap = await db.ref("templates").once("value");
-
   res.json({
     success: true,
     templates: snap.val() || {}
   });
-
 });
 
 /* ====================================================
@@ -185,253 +228,76 @@ app.get("/templates", async (req, res) => {
 ==================================================== */
 
 app.post("/share-device", async (req, res) => {
-
   try {
-
     const { deviceId, ownerUid, targetUid } = req.body;
-
     const ref = db.ref("devices/" + deviceId);
     const snap = await ref.once("value");
     const device = snap.val();
 
-    if (!device) {
-      return res.status(404).json({ error: "Device Not Found" });
-    }
+    if (!device) return res.status(404).json({ error: "Device Not Found" });
+    if (device.owner !== ownerUid) return res.status(403).json({ error: "Only Owner Can Share" });
 
-    if (device.owner !== ownerUid) {
-      return res.status(403).json({ error: "Only Owner Can Share" });
-    }
-
-    await ref.child("sharedWith").update({
-      [targetUid]: true
-    });
-
+    await ref.child("sharedWith").update({ [targetUid]: true });
     res.json({ success: true });
-
   } catch (err) {
-
     res.status(500).json({ error: err.message });
-
   }
-
 });
 
-/* ====================================================
-   UNSHARE
-==================================================== */
-
 app.post("/unshare-device", async (req, res) => {
-
   try {
-
     const { deviceId, ownerUid, targetUid } = req.body;
-
     const ref = db.ref("devices/" + deviceId);
     const snap = await ref.once("value");
     const device = snap.val();
 
     if (!device) return res.status(404).json({ error: "Not Found" });
-
-    if (device.owner !== ownerUid) {
-      return res.status(403).json({ error: "Not Owner" });
-    }
+    if (device.owner !== ownerUid) return res.status(403).json({ error: "Not Owner" });
 
     await ref.child("sharedWith/" + targetUid).remove();
-
     res.json({ success: true });
-
   } catch (err) {
-
     res.status(500).json({ error: err.message });
-
   }
-
 });
-
-/* ====================================================
-   MQTT
-==================================================== */
-
-const client = mqtt.connect("mqtt://broker.emqx.io:1883", {
-  reconnectPeriod: 5000
-});
-
-client.on("connect", () => {
-
-  console.log("✅ MQTT Connected");
-
-  client.subscribe("device/+/heartbeat");
-  client.subscribe("device/+/status");
-  client.subscribe("device/+/command");
-
-});
-
-/* ====================================================
-   🔥 MQTT ERROR HANDLER (PRODUCTION FIX)
-==================================================== */
-
-client.on("error", (err) => {
-  console.log("MQTT Error:", err.message);
-});
-
-/* ====================================================
-   🔥 MQTT MESSAGE (ULTRA PRODUCTION FIX - NO UNDEFINED)
-==================================================== */
-
-client.on("message", async (topic, message) => {
-
-  try {
-
-    const payload = JSON.parse(message.toString());
-    const deviceId = topic.split("/")[1];
-
-    const ref = db.ref("devices/" + deviceId);
-
-    // 🔥 STATUS TOPIC DETECT
-    if (topic.includes("/status")) {
-
-      // ✅ Status topic এ payload.status চেক করছি
-      const updateData = {
-        lastSeen: Date.now()
-      };
-
-      if (payload.status !== undefined && payload.status !== null) {
-        updateData.status = payload.status;
-      }
-
-      await ref.update(updateData);
-      return;
-    }
-
-    // 🔥 HEARTBEAT / OTHER DATA - PRODUCTION GRADE FIX
-    const updateData = {
-      lastSeen: Date.now(),
-      data: payload
-    };
-
-    // ✅ Status - শুধু মাত্র যদি সঠিকভাবে থাকে
-    if (payload.status !== undefined && payload.status !== null) {
-      if (typeof payload.status === 'string' && payload.status.trim() !== '') {
-        updateData.status = payload.status;
-      }
-    }
-
-    // ✅ Template - শুধু যদি object হয়
-    if (payload.template && typeof payload.template === 'object') {
-      updateData.template = payload.template;
-    }
-
-    // ✅ Capabilities - শুধু যদি object হয়
-    if (payload.capabilities && typeof payload.capabilities === 'object') {
-      updateData.capabilities = payload.capabilities;
-    }
-
-    console.log(`📡 Updating ${deviceId} with:`, Object.keys(updateData));
-    await ref.update(updateData);
-
-  } catch (err) {
-    console.log("MQTT Error:", err.message);
-  }
-
-});
-
-/* ====================================================
-   COMMAND LISTENER
-==================================================== */
-
-db.ref("devices").on("child_changed", async (snapshot) => {
-
-  const deviceId = snapshot.key;
-  const data = snapshot.val();
-
-  if (data?.command) {
-
-    client.publish(
-      `device/${deviceId}/command`,
-      JSON.stringify({ cmd: data.command }),
-      { qos: 1 }
-    );
-
-    await db.ref("devices/" + deviceId + "/command").set(null);
-  }
-
-});
-
-/* ====================================================
-   OFFLINE DETECTION
-==================================================== */
-
-setInterval(async () => {
-
-  const snap = await db.ref("devices").once("value");
-  const devices = snap.val() || {};
-
-  for (const id of Object.keys(devices)) {
-
-    const device = devices[id];
-
-    if (device.lastSeen) {
-
-      const diff = Date.now() - device.lastSeen;
-
-      if (diff > 20000 && device.status !== "OFFLINE") {
-
-        await db.ref("devices/" + id).update({
-          status: "OFFLINE"
-        });
-
-      }
-    }
-  }
-
-}, 10000);
 
 /* ====================================================
    OTA
 ==================================================== */
 
 app.get("/latest-firmware", async (req, res) => {
-
   const snap = await db.ref("firmware").once("value");
-
   res.json(snap.val() || {
     version: "1.0.0",
     fileUrl: "",
     forceUpdate: false
   });
-
 });
 
 app.post("/update-firmware", isAdmin, async (req, res) => {
-
   const { version, fileUrl, forceUpdate } = req.body;
-
   await db.ref("firmware").set({
     version,
     fileUrl,
     forceUpdate: forceUpdate || false,
     updatedAt: Date.now()
   });
-
   res.json({ success: true });
-
 });
 
 /* ====================================================
-   DASHBOARD
+   DASHBOARD STATS
 ==================================================== */
 
 app.get("/dashboard/stats", isAdmin, async (req, res) => {
-
   const deviceSnap = await db.ref("devices").once("value");
   const devices = deviceSnap.val() || {};
 
-  let online = 0;
-  let offline = 0;
-
+  let online = 0, offline = 0;
   Object.values(devices).forEach(d => {
-    if (d.status === "ONLINE") online++;
-    if (d.status === "OFFLINE") offline++;
+    const lastSeen = d.lastSeen || 0;
+    if (Date.now() - lastSeen < 30000) online++;
+    else offline++;
   });
 
   const userSnap = await db.ref("users").once("value");
@@ -443,11 +309,51 @@ app.get("/dashboard/stats", isAdmin, async (req, res) => {
     offlineDevices: offline,
     totalUsers: Object.keys(users).length
   });
-
 });
 
 /* ====================================================
-   🔥 KEEP ALIVE PING (Render Sleep Prevent)
+   GET DEVICE STATUS
+==================================================== */
+
+app.get("/device/:deviceId", async (req, res) => {
+  try {
+    const { deviceId } = req.params;
+    const snap = await db.ref("devices/" + deviceId).once("value");
+    const device = snap.val();
+
+    if (!device) {
+      return res.status(404).json({ error: "Device not found" });
+    }
+
+    res.json({ success: true, device });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ====================================================
+   OFFLINE DETECTION
+==================================================== */
+
+setInterval(async () => {
+  const snap = await db.ref("devices").once("value");
+  const devices = snap.val() || {};
+
+  for (const id of Object.keys(devices)) {
+    const device = devices[id];
+    if (device.lastSeen) {
+      const diff = Date.now() - device.lastSeen;
+      if (diff > 30000 && device.status !== "OFFLINE") {
+        await db.ref("devices/" + id).update({
+          status: "OFFLINE"
+        });
+      }
+    }
+  }
+}, 10000);
+
+/* ====================================================
+   KEEP ALIVE
 ==================================================== */
 
 setInterval(() => {
@@ -459,5 +365,5 @@ setInterval(() => {
 ==================================================== */
 
 app.listen(PORT, () => {
-  console.log("🔥 Backend Running on Port", PORT);
+  console.log("🔥 Firebase Only Backend Running on Port", PORT);
 });
